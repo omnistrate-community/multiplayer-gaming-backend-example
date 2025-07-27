@@ -1,0 +1,513 @@
+name: Enterprise-Gaming-Backend-Layered
+deployment:
+  hostedDeployment:
+    AwsAccountId: '339713121445'
+    GcpProjectId: 'gaming-backend-prod'
+    GcpProjectNumber: '61114262792'
+    GcpServiceAccountEmail: 'gaming-backend@gaming-backend-prod.iam.gserviceaccount.com'
+loadBalancers:
+  https:
+    - name: gaming-api-gateway
+      description: "HTTPS load balancer for gaming API gateway and web services"
+      enableCustomDNS: true
+      paths:
+        - targetKubernetesServiceName: player-service
+          associatedResourceKey: playerService
+          path: "/api/v1/players/*"
+          backendPort: 8080
+        - targetKubernetesServiceName: game-session-service
+          associatedResourceKey: gameSessionService
+          path: "/api/v1/sessions/*"
+          backendPort: 8081
+        - targetKubernetesServiceName: analytics-service
+          associatedResourceKey: analyticsService
+          path: "/api/v1/analytics/*"
+          backendPort: 8084
+  tcp:
+    - name: gaming-tcp-loadbalancer
+      description: "TCP load balancer for game server connections and real-time traffic"
+      ports:
+        - associatedResourceKeys: ["gameSessionService"]
+          backendPort: 7777
+          ingressPort: 7777
+        - associatedResourceKeys: ["gameSessionService"]
+          backendPort: 7778
+          ingressPort: 7778
+services:
+  # Infrastructure Layer - Cloud Resources via Terraform
+  - name: gameInfrastructure
+    internal: true
+    terraformConfigurations:
+      configurationPerCloudProvider:
+        aws:
+          terraformPath: /terraform/aws/infrastructure
+          gitConfiguration:
+            reference: refs/heads/main
+            repositoryUrl: https://github.com/enterprise-gaming/multiplayer-backend-infra.git
+            accessToken: $secret.GITHUB_ACCESS_TOKEN
+          terraformExecutionIdentity: "arn:aws:iam::339713121445:role/omnistrate-gaming-terraform-execution-role"
+        gcp:
+          terraformPath: /terraform/gcp/infrastructure
+          gitConfiguration:
+            reference: refs/heads/main
+            repositoryUrl: https://github.com/enterprise-gaming/multiplayer-backend-infra.git
+            accessToken: $secret.GITHUB_ACCESS_TOKEN
+          terraformExecutionIdentity: "gaming-backend@gaming-backend-prod.iam.gserviceaccount.com"
+
+  # Data Layer - Databases and Caching  
+  - name: dataLayer
+    internal: true
+    dependsOn:
+      - gameInfrastructure
+    terraformConfigurations:
+      configurationPerCloudProvider:
+        aws:
+          terraformPath: /terraform/aws/data-layer
+          gitConfiguration:
+            reference: refs/heads/main
+            repositoryUrl: https://github.com/enterprise-gaming/multiplayer-backend-infra.git
+            accessToken: $secret.GITHUB_ACCESS_TOKEN
+          terraformExecutionIdentity: "arn:aws:iam::339713121445:role/omnistrate-gaming-terraform-execution-role"
+        gcp:
+          terraformPath: /terraform/gcp/data-layer
+          gitConfiguration:
+            reference: refs/heads/main
+            repositoryUrl: https://github.com/enterprise-gaming/multiplayer-backend-infra.git
+            accessToken: $secret.GITHUB_ACCESS_TOKEN
+          terraformExecutionIdentity: "gaming-backend@gaming-backend-prod.iam.gserviceaccount.com"
+
+  # Player Management Service with Layered Chart Values
+  - name: playerService
+    dependsOn:
+      - dataLayer
+    compute:
+      instanceTypes:
+        - apiParam: playerServiceInstanceType
+          cloudProvider: aws
+        - apiParam: playerServiceInstanceType
+          cloudProvider: gcp
+    network:
+      ports:
+        - 8080
+        - 8443
+    helmChartConfiguration:
+      chartName: player-service
+      chartVersion: 2.1.0
+      chartRepoName: enterprise-gaming
+      chartRepoURL: https://charts.enterprise-gaming.com/
+      authProvider:
+        username: $var.helmRepoUsername
+        password: $var.helmRepoPassword
+      layeredChartValues:
+        # Base layer - applies to all deployments
+        - values:
+            replicaCount: 3
+            image:
+              repository: enterprise-gaming/player-service
+              tag: $var.playerServiceVersion
+              pullPolicy: Always
+            service:
+              type: LoadBalancer
+              port: 8080
+              httpsPort: 8443
+            database:
+              host: "{{ $dataLayer.out.player_db_endpoint }}"
+              name: "players"
+              username: "{{ $dataLayer.out.player_db_username }}"
+              password: "{{ $dataLayer.out.player_db_password }}"
+            redis:
+              host: "{{ $dataLayer.out.redis_endpoint }}"
+              port: 6379
+            resources:
+              requests:
+                cpu: 250m
+                memory: 512Mi
+              limits:
+                cpu: 500m
+                memory: 1Gi
+            autoscaling:
+              enabled: true
+              minReplicas: 3
+              maxReplicas: 20
+              targetCPUUtilizationPercentage: 70
+            monitoring:
+              enabled: true
+            affinity:
+              nodeAffinity:
+                requiredDuringSchedulingIgnoredDuringExecution:
+                  nodeSelectorTerms:
+                    - matchExpressions:
+                      - key: omnistrate.com/managed-by
+                        operator: In
+                        values:
+                        - omnistrate
+
+        # AWS-specific configuration layer
+        - scope:
+            "{{ $sys.deploymentCell.cloudProviderName }}": "aws"
+          values:
+            serviceAccount:
+              annotations:
+                eks.amazonaws.com/role-arn: "{{ $gameInfrastructure.out.player_service_role_arn }}"
+            ingress:
+              enabled: true
+              className: "alb"
+              annotations:
+                kubernetes.io/ingress.class: "alb"
+                alb.ingress.kubernetes.io/scheme: "internet-facing"
+                alb.ingress.kubernetes.io/target-type: "ip"
+            persistence:
+              storageClass: "gp3"
+            monitoring:
+              cloudwatch:
+                enabled: true
+                logGroup: "{{ $gameInfrastructure.out.player_service_log_group }}"
+
+        # GCP-specific configuration layer
+        - scope:
+            "{{ $sys.deploymentCell.cloudProviderName }}": "gcp"
+          values:
+            serviceAccount:
+              annotations:
+                iam.gke.io/gcp-service-account: "{{ $gameInfrastructure.out.player_service_account }}"
+            ingress:
+              enabled: true
+              className: "gce"
+              annotations:
+                kubernetes.io/ingress.global-static-ip-name: "{{ $gameInfrastructure.out.global_ip_name }}"
+                cloud.google.com/load-balancer-type: "External"
+            persistence:
+              storageClass: "ssd"
+            monitoring:
+              stackdriver:
+                enabled: true
+
+        # Production environment configuration
+        - scope:
+            "{{ $var.environment }}": "production"
+          values:
+            replicaCount: 5
+            resources:
+              requests:
+                cpu: 500m
+                memory: 1Gi
+              limits:
+                cpu: 1000m
+                memory: 2Gi
+            autoscaling:
+              maxReplicas: 50
+
+        # Development environment configuration
+        - scope:
+            "{{ $var.environment }}": "development"
+          values:
+            replicaCount: 1
+            resources:
+              requests:
+                cpu: 100m
+                memory: 256Mi
+              limits:
+                cpu: 200m
+                memory: 512Mi
+            autoscaling:
+              maxReplicas: 5
+
+    apiParameters:
+      - key: playerServiceInstanceType
+        description: Instance Type for Player Service
+        name: Player Service Instance Type
+        type: String
+        modifiable: true
+        required: false
+        export: true
+        defaultValue: "t3.medium"
+      - key: playerServiceVersion
+        description: Version of Player Service to deploy
+        name: Player Service Version
+        type: String
+        modifiable: true
+        required: false
+        export: false
+        defaultValue: "v2.1.0"
+      - key: helmRepoUsername
+        description: Helm Repository Username
+        name: Helm Repository Username
+        type: String
+        modifiable: false
+        required: true
+        export: false
+      - key: helmRepoPassword
+        description: Helm Repository Password
+        name: Helm Repository Password
+        type: Password
+        modifiable: false
+        required: true
+        export: false
+      - key: environment
+        description: Deployment environment
+        name: Environment
+        type: String
+        modifiable: false
+        required: true
+        export: true
+        defaultValue: "production"
+
+  # Game Session Service with Multi-Cloud Layering
+  - name: gameSessionService
+    dependsOn:
+      - dataLayer
+      - playerService
+    compute:
+      instanceTypes:
+        - apiParam: gameSessionInstanceType
+          cloudProvider: aws
+        - apiParam: gameSessionInstanceType
+          cloudProvider: gcp
+    network:
+      ports:
+        - 8081
+        - 7777  # Game server port
+        - 7778  # UDP port for real-time gameplay
+    helmChartConfiguration:
+      chartName: game-session-service
+      chartVersion: 1.8.0
+      chartRepoName: enterprise-gaming
+      chartRepoURL: https://charts.enterprise-gaming.com/
+      authProvider:
+        username: $var.helmRepoUsername
+        password: $var.helmRepoPassword
+      layeredChartValues:
+        # Base configuration for all clouds
+        - values:
+            replicaCount: 5
+            image:
+              repository: enterprise-gaming/game-session-service
+              tag: $var.gameSessionVersion
+            service:
+              type: LoadBalancer
+              httpPort: 8081
+              gamePort: 7777
+              udpPort: 7778
+            database:
+              host: "{{ $dataLayer.out.game_session_db_endpoint }}"
+              name: "game_sessions"
+            redis:
+              host: "{{ $dataLayer.out.redis_endpoint }}"
+            gameServer:
+              maxConcurrentSessions: $var.maxPlayersPerSession
+              sessionTimeoutMinutes: 30
+            resources:
+              requests:
+                cpu: 500m
+                memory: 1Gi
+              limits:
+                cpu: 2000m
+                memory: 4Gi
+            autoscaling:
+              enabled: true
+              minReplicas: 5
+              maxReplicas: 50
+              targetCPUUtilizationPercentage: 60
+
+        # AWS-specific configuration
+        - scope:
+            "{{ $sys.deploymentCell.cloudProviderName }}": "aws"
+          values:
+            serviceAccount:
+              annotations:
+                eks.amazonaws.com/role-arn: "{{ $gameInfrastructure.out.game_session_role_arn }}"
+            storage:
+              class: "gp3"
+              provisioner: "ebs.csi.aws.com"
+            loadBalancer:
+              type: "nlb"
+              annotations:
+                service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+
+        # GCP-specific configuration
+        - scope:
+            "{{ $sys.deploymentCell.cloudProviderName }}": "gcp"
+          values:
+            serviceAccount:
+              annotations:
+                iam.gke.io/gcp-service-account: "{{ $gameInfrastructure.out.game_session_service_account }}"
+            storage:
+              class: "ssd"
+              provisioner: "pd.csi.storage.gke.io"
+            loadBalancer:
+              type: "external"
+              annotations:
+                cloud.google.com/load-balancer-type: "External"
+
+        # High-traffic region configuration
+        - scope:
+            "{{ $sys.deploymentCell.region }}": "us-east-1"
+          values:
+            replicaCount: 10
+            resources:
+              requests:
+                cpu: 1000m
+                memory: 2Gi
+              limits:
+                cpu: 4000m
+                memory: 8Gi
+            autoscaling:
+              maxReplicas: 100
+
+        # Low-traffic region configuration  
+        - scope:
+            "{{ $sys.deploymentCell.region }}": "eu-central-1"
+          values:
+            replicaCount: 3
+            autoscaling:
+              maxReplicas: 20
+
+    apiParameters:
+      - key: gameSessionInstanceType
+        description: Instance Type for Game Session Service
+        name: Game Session Instance Type
+        type: String
+        modifiable: true
+        required: false
+        export: true
+        defaultValue: "c5.large"
+      - key: gameSessionVersion
+        description: Version of Game Session Service to deploy
+        name: Game Session Service Version
+        type: String
+        modifiable: true
+        required: false
+        export: false
+        defaultValue: "v1.8.0"
+      - key: maxPlayersPerSession
+        description: Maximum number of players per game session
+        name: Max Players Per Session
+        type: Float64
+        modifiable: true
+        required: false
+        export: false
+        defaultValue: "64"
+
+  # Analytics Service with Advanced Layering
+  - name: analyticsService
+    dependsOn:
+      - dataLayer
+    compute:
+      instanceTypes:
+        - apiParam: analyticsInstanceType
+          cloudProvider: aws
+        - apiParam: analyticsInstanceType
+          cloudProvider: gcp
+    network:
+      ports:
+        - 8084
+    helmChartConfiguration:
+      chartName: analytics-service
+      chartVersion: 2.0.1
+      chartRepoName: enterprise-gaming
+      chartRepoURL: https://charts.enterprise-gaming.com/
+      authProvider:
+        username: $var.helmRepoUsername
+        password: $var.helmRepoPassword
+      layeredChartValues:
+        # Base configuration for all clouds
+        - values:
+            replicaCount: 2
+            image:
+              repository: enterprise-gaming/analytics-service
+              tag: $var.analyticsVersion
+            service:
+              type: LoadBalancer
+              port: 8084
+            dataWarehouse:
+              endpoint: "{{ $dataLayer.out.analytics_warehouse_endpoint }}"
+            resources:
+              requests:
+                cpu: 500m
+                memory: 1Gi
+              limits:
+                cpu: 2000m
+                memory: 4Gi
+
+        # AWS-specific configuration
+        - scope:
+            "{{ $sys.deploymentCell.cloudProviderName }}": "aws"
+          values:
+            serviceAccount:
+              annotations:
+                eks.amazonaws.com/role-arn: "{{ $gameInfrastructure.out.analytics_role_arn }}"
+            objectStorage:
+              provider: "s3"
+              bucket: "{{ $gameInfrastructure.out.analytics_bucket_name }}"
+              region: "{{ $sys.deploymentCell.region }}"
+            dataWarehouse:
+              type: "redshift"
+              ssl: true
+
+        # GCP-specific configuration
+        - scope:
+            "{{ $sys.deploymentCell.cloudProviderName }}": "gcp"
+          values:
+            serviceAccount:
+              annotations:
+                iam.gke.io/gcp-service-account: "{{ $gameInfrastructure.out.analytics_service_account }}"
+            objectStorage:
+              provider: "gcs"
+              bucket: "{{ $gameInfrastructure.out.analytics_bucket_name }}"
+              location: "{{ $sys.deploymentCell.region }}"
+            dataWarehouse:
+              type: "bigquery"
+              dataset: "{{ $dataLayer.out.analytics_dataset_id }}"
+
+        # External configuration layer from Git repository
+        - scope:
+            "{{ $var.environment }}": "production"
+          valuesFile:
+            gitConfiguration:
+              repositoryUrl: "https://github.com/enterprise-gaming/helm-configs.git"
+              reference: "refs/heads/main"
+              accessToken: $var.helmRepoPassword
+            path: "analytics/production-values.yaml"
+
+        # Analytics-enabled configuration
+        - scope:
+            "{{ $var.enableAnalytics }}": "true"
+          values:
+            analytics:
+              realTimeProcessing: true
+              batchProcessing: true
+              retention:
+                raw: "30d"
+                aggregated: "365d"
+            monitoring:
+              metrics:
+                enabled: true
+                interval: "30s"
+              alerts:
+                enabled: true
+
+    apiParameters:
+      - key: analyticsInstanceType
+        description: Instance Type for Analytics Service
+        name: Analytics Instance Type
+        type: String
+        modifiable: true
+        required: false
+        export: true
+        defaultValue: "m5.large"
+      - key: analyticsVersion
+        description: Version of Analytics Service to deploy
+        name: Analytics Service Version
+        type: String
+        modifiable: true
+        required: false
+        export: false
+        defaultValue: "v2.0.1"
+      - key: enableAnalytics
+        description: Enable detailed game analytics collection
+        name: Enable Analytics
+        type: String
+        modifiable: true
+        required: false
+        export: false
+        defaultValue: "true"
