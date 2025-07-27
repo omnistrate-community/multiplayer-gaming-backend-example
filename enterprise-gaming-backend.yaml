@@ -5,6 +5,9 @@ deployment:
     GcpProjectId: 'gaming-backend-prod'
     GcpProjectNumber: '61114262792'
     GcpServiceAccountEmail: 'gaming-backend@gaming-backend-prod.iam.gserviceaccount.com'
+    AzureSubscriptionId: 'b2c4f98d-1234-5678-9abc-def012345678'
+    AzureTenantId: '12345678-1234-1234-1234-123456789abc'
+    AzureClientId: 'enterprise-gaming-client-id'
 loadBalancers:
   https:
     - name: gaming-api-gateway
@@ -43,16 +46,20 @@ services:
           terraformPath: /terraform/aws/infrastructure
           gitConfiguration:
             reference: refs/heads/main
-            repositoryUrl: https://github.com/enterprise-gaming/multiplayer-backend-infra.git
+            repositoryUrl: https://github.com/omnistrate-community/multiplayer-gaming-backend-example.git
             accessToken: $secret.GITHUB_ACCESS_TOKEN
-          terraformExecutionIdentity: "arn:aws:iam::339713121445:role/omnistrate-gaming-terraform-execution-role"
         gcp:
           terraformPath: /terraform/gcp/infrastructure
           gitConfiguration:
             reference: refs/heads/main
-            repositoryUrl: https://github.com/enterprise-gaming/multiplayer-backend-infra.git
+            repositoryUrl: https://github.com/omnistrate-community/multiplayer-gaming-backend-example.git
             accessToken: $secret.GITHUB_ACCESS_TOKEN
-          terraformExecutionIdentity: "gaming-backend@gaming-backend-prod.iam.gserviceaccount.com"
+\        azure:
+          terraformPath: /terraform/azure/infrastructure
+          gitConfiguration:
+            reference: refs/heads/main
+            repositoryUrl: https://github.com/omnistrate-community/multiplayer-gaming-backend-example.git
+            accessToken: $secret.GITHUB_ACCESS_TOKEN
 
   # Data Layer - Databases and Caching  
   - name: dataLayer
@@ -65,16 +72,20 @@ services:
           terraformPath: /terraform/aws/data-layer
           gitConfiguration:
             reference: refs/heads/main
-            repositoryUrl: https://github.com/enterprise-gaming/multiplayer-backend-infra.git
+            repositoryUrl: https://github.com/omnistrate-community/multiplayer-gaming-backend-example.git
             accessToken: $secret.GITHUB_ACCESS_TOKEN
-          terraformExecutionIdentity: "arn:aws:iam::339713121445:role/omnistrate-gaming-terraform-execution-role"
         gcp:
           terraformPath: /terraform/gcp/data-layer
           gitConfiguration:
             reference: refs/heads/main
-            repositoryUrl: https://github.com/enterprise-gaming/multiplayer-backend-infra.git
+            repositoryUrl: https://github.com/omnistrate-community/multiplayer-gaming-backend-example.git
             accessToken: $secret.GITHUB_ACCESS_TOKEN
-          terraformExecutionIdentity: "gaming-backend@gaming-backend-prod.iam.gserviceaccount.com"
+        azure:
+          terraformPath: /terraform/azure/data-layer
+          gitConfiguration:
+            reference: refs/heads/main
+            repositoryUrl: https://github.com/omnistrate-community/multiplayer-gaming-backend-example.git
+            accessToken: $secret.GITHUB_ACCESS_TOKEN
 
   # Player Management Service with Layered Chart Values
   - name: playerService
@@ -86,6 +97,8 @@ services:
           cloudProvider: aws
         - apiParam: playerServiceInstanceType
           cloudProvider: gcp
+        - apiParam: playerServiceInstanceType
+          cloudProvider: azure
     network:
       ports:
         - 8080
@@ -182,6 +195,26 @@ services:
               stackdriver:
                 enabled: true
 
+        # Azure-specific configuration layer
+        - scope:
+            "{{ $sys.deploymentCell.cloudProviderName }}": "azure"
+          values:
+            serviceAccount:
+              annotations:
+                azure.workload.identity/client-id: "{{ $gameInfrastructure.out.player_service_identity_client_id }}"
+            ingress:
+              enabled: true
+              className: "azure-application-gateway"
+              annotations:
+                kubernetes.io/ingress.class: "azure/application-gateway"
+                appgw.ingress.kubernetes.io/ssl-redirect: "true"
+            persistence:
+              storageClass: "managed-premium"
+            monitoring:
+              azureMonitor:
+                enabled: true
+                workspaceId: "{{ $gameInfrastructure.out.log_analytics_workspace_id }}"
+
         # Production environment configuration
         - scope:
             "{{ $var.environment }}": "production"
@@ -263,6 +296,8 @@ services:
           cloudProvider: aws
         - apiParam: gameSessionInstanceType
           cloudProvider: gcp
+        - apiParam: gameSessionInstanceType
+          cloudProvider: azure
     network:
       ports:
         - 8081
@@ -339,6 +374,21 @@ services:
               annotations:
                 cloud.google.com/load-balancer-type: "External"
 
+        # Azure-specific configuration
+        - scope:
+            "{{ $sys.deploymentCell.cloudProviderName }}": "azure"
+          values:
+            serviceAccount:
+              annotations:
+                azure.workload.identity/client-id: "{{ $gameInfrastructure.out.game_session_identity_client_id }}"
+            storage:
+              class: "managed-premium"
+              provisioner: "disk.csi.azure.com"
+            loadBalancer:
+              type: "internal"
+              annotations:
+                service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+
         # High-traffic region configuration
         - scope:
             "{{ $sys.deploymentCell.region }}": "us-east-1"
@@ -398,6 +448,8 @@ services:
           cloudProvider: aws
         - apiParam: analyticsInstanceType
           cloudProvider: gcp
+        - apiParam: analyticsInstanceType
+          cloudProvider: azure
     network:
       ports:
         - 8084
@@ -458,6 +510,22 @@ services:
             dataWarehouse:
               type: "bigquery"
               dataset: "{{ $dataLayer.out.analytics_dataset_id }}"
+
+        # Azure-specific configuration
+        - scope:
+            "{{ $sys.deploymentCell.cloudProviderName }}": "azure"
+          values:
+            serviceAccount:
+              annotations:
+                azure.workload.identity/client-id: "{{ $gameInfrastructure.out.analytics_identity_client_id }}"
+            objectStorage:
+              provider: "azure"
+              storageAccount: "{{ $gameInfrastructure.out.analytics_storage_account }}"
+              container: "{{ $gameInfrastructure.out.analytics_container_name }}"
+            dataWarehouse:
+              type: "synapse"
+              database: "{{ $dataLayer.out.analytics_database_name }}"
+              sqlPool: "{{ $dataLayer.out.analytics_sql_pool }}"
 
         # External configuration layer from Git repository
         - scope:

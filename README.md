@@ -110,7 +110,6 @@ This is a comprehensive example of an enterprise-grade multiplayer gaming backen
 
 ### 📊 Observability
 - **Logging**: Centralized logging with cloud-native solutions
-- **Monitoring**: Auto-scaling based on CPU/memory metrics
 - **Analytics**: Real-time data pipelines for business insights
 
 ## Service Dependencies
@@ -221,30 +220,7 @@ The service offers extensive customization through API parameters:
 
 4. **Monitor Deployment**:
    - Check service health through Omnistrate dashboard
-   - Monitor auto-scaling metrics
    - Verify cross-service communication
-
-## Enterprise-Studio Scale Features
-
-### High Availability
-- Multi-AZ deployments across all clouds
-- Automatic failover for critical services
-- Cross-region data replication
-
-### Performance Optimization
-- Redis caching for low-latency data access
-- CDN integration for game assets
-- Regional deployment for reduced latency
-
-### Scalability
-- Horizontal pod autoscaling (3-50 replicas)
-- Database auto-scaling and read replicas
-- Event-driven architecture with Kafka
-
-### Security
-- Zero-trust networking with service mesh
-- Encrypted communication between services
-- Compliance-ready audit logging
 
 This example demonstrates the power of Omnistrate's platform for managing complex, enterprise-grade gaming infrastructure across multiple cloud providers while maintaining consistency, security, and scalability.
 
@@ -265,7 +241,7 @@ Omnistrate's cellular architecture provides the foundational building blocks for
 ┌─────────────────────────────────────────────────────────────────────────────────────────┐
 │                                Control Plane                                            │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                     │
-│  │   Service   │  │   Global    │  │  Customer   │  │   Billing   │                     │
+│  │   Service   │  │             │  │  Customer   │  │   Billing   │                     │
 │  │ Management  │  │Load Balancer│  │   Portal    │  │ & Metering  │                     │
 │  └─────────────┘  └─────────────┘  └─────────────┘  └─────────────┘                     │
 └─────────────────────────────────────────────────────────────────────────────────────────┘
@@ -279,17 +255,17 @@ Omnistrate's cellular architecture provides the foundational building blocks for
 │                           │  │                    │  │                          │
 │ ┌───────────────────────┐ │  │ ┌────────────────┐ │  │ ┌──────────────────────┐ │
 │ │     Player Service    │ │  │ │ Player Service │ │  │ │   Player Service     │ │
-│ │   ┌─────┬─────────┐   │ │  │ │ ┌────┬─────────┐││  │ │ ┌──────┬───────────┐ │ │
-│ │   │Game1│  Game2  │   │ │  │ │ │T1  │   T2    │││  │ │ │Client│ Dedicated │ │ │
-│ │   └─────┴─────────┘   │ │  │ │ └────┴─────────┘││  │ │ └──────┴───────────┘ │ │
+│ │   ┌─────┬─────────┐   │ │  │ │ ┌────┬────────┐│ │  │ │ ┌──────┬───────────┐ │ │
+│ │   │Game1│  Game2  │   │ │  │ │ │T1  │   T2   ││ │  │ │ │Client│ Dedicated │ │ │
+│ │   └─────┴─────────┘   │ │  │ │ └────┴────────┘│ │  │ │ └──────┴───────────┘ │ │
 │ └───────────────────────┘ │  │ └────────────────┘ │  │ └──────────────────────┘ │
 │                           │  │                    │  │                          │
 │ ┌───────────────────────┐ │  │ ┌────────────────┐ │  │ ┌──────────────────────┐ │
 │ │  Game Session Service │ │  │ │Game Sessions   │ │  │ │ Game Session Service │ │
-│ │   ┌─────┬─────────┐   │ │  │ │ ┌────┬─────────┐││  │ │ ┌──────┬───────────┐ │ │
-│ │   │ 50K │   30K   │   │ │  │ │ │2K  │   5K    │││  │ │ │ 100K │ Compliant │ │ │
-│ │   │Users│  Users  │   │ │  │ │ │Ses │  Sess   │││  │ │ │ CCU  │ Isolation │ │ │
-│ │   └─────┴─────────┘   │ │  │ │ └────┴─────────┘││  │ │ └──────┴───────────┘ │ │
+│ │   ┌─────┬─────────┐   │ │  │ │ ┌────┬────────┐│ │  │ │ ┌──────┬───────────┐ │ │
+│ │   │ 50K │   30K   │   │ │  │ │ │2K  │   5K   ││ │  │ │ │ 100K │ Compliant │ │ │
+│ │   │Users│  Users  │   │ │  │ │ │Ses │  Sess  ││ │  │ │ │ CCU  │ Isolation │ │ │
+│ │   └─────┴─────────┘   │ │  │ │ └────┴────────┘│ │  │ │ └──────┴───────────┘ │ │
 │ └───────────────────────┘ │  │ └────────────────┘ │  │ └──────────────────────┘ │
 │                           │  │                    │  │                          │
 │ ┌───────────────────────┐ │  │ ┌────────────────┐ │  │ ┌──────────────────────┐ │
@@ -337,16 +313,6 @@ Omnistrate's cellular architecture provides the foundational building blocks for
 │  │ • Custom Config │      │ • Standard SLA  │      │ • Custom SLA    │                  │
 │  │ • Regional      │      │ • Shared Infra  │      │ • Dedicated     │                  │
 │  └─────────────────┘      └─────────────────┘      └─────────────────┘                  │
-└─────────────────────────────────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────────────────────────────┐
-│                           Cross-Cell Communication                                      │
-│                                                                                         │
-│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐               │
-│  │   Global    │    │   Player    │    │   Cross-    │    │  Analytics  │               │
-│  │ Leaderboard │    │ Migration   │    │   Region    │    │   Rollup    │               │
-│  │  Sync       │    │   Service   │    │ Matchmaking │    │  Pipelines  │               │
-│  └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘               │
 └─────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -451,19 +417,5 @@ Asia-Pacific:
 - **Compliance**: Meet regional gaming regulations per cell
 - **Load Distribution**: Distribute player load across multiple cells
 - **Seasonal Scaling**: Scale cells up/down based on gaming seasons
-
-### Cross-Cell Gaming Features
-
-#### **Global Player Services**
-- **Universal Player Profiles**: Synchronized across all cells
-- **Cross-Region Friend Lists**: Players can connect globally
-- **Global Leaderboards**: Aggregate statistics from all cells
-- **Player Migration**: Move players between cells for optimal experience
-
-#### **Inter-Cell Communication**
-- **Cross-Region Matchmaking**: Find players across geographic boundaries
-- **Global Tournament Support**: Multi-cell tournament infrastructure
-- **Analytics Aggregation**: Combine analytics data from all cells
-- **Content Synchronization**: Deploy game updates across all cells
 
 This cellular architecture enables gaming companies to start small with shared infrastructure and scale to dedicated, high-performance cells as their player base grows, all while maintaining operational efficiency and providing the best possible gaming experience.

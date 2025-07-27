@@ -93,6 +93,11 @@ omnistrate-cache/
 .gcp/
 .azure/
 
+# Azure specific
+.azure/
+azure-pipelines/
+*.azureauth
+
 # Docker
 .dockerignore
 Dockerfile.local
